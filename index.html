@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="uz">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>JumpRunner — Oddiy mobil o'yin</title>
+  <style>
+    html,body { margin:0; padding:0; height:100%; background:#1e1e2f; }
+    #game-container { width:100%; height:100vh; touch-action:none; }
+    .hint { position: absolute; left: 50%; transform: translateX(-50%); top: 8px; color:#ddd; font-family: sans-serif; font-size:14px; pointer-events:none; }
+  </style>
+  <!-- Phaser 3 CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+</head>
+<body>
+  <div class="hint">Ekranni teging yoki bo‘sh joyni bosing — sakraysiz! ⬆️</div>
+  <div id="game-container"></div>
+
+<script>
+class MainScene extends Phaser.Scene {
+  constructor(){ super('MainScene'); }
+  preload(){}
+  create(){
+    // o'yin fizikasi sozlamalari
+    this.physics.world.setBounds(0,0,this.scale.width, this.scale.height);
+
+    // background gradient effect (simple)
+    this.cameras.main.setBackgroundColor('#1e1e2f');
+
+    // yer (ground)
+    this.ground = this.add.rectangle(0, this.scale.height - 64, this.scale.width * 2, 64, 0x2b2b3b).setOrigin(0);
+    this.physics.add.existing(this.ground, true); // static body
+
+    // o'yinchi (player) - kvadrat
+    this.player = this.add.rectangle(80, this.scale.height - 150, 40, 40, 0x66ccff);
+    this.physics.add.existing(this.player);
+    this.player.body.setCollideWorldBounds(true);
+    this.player.body.setGravityY(1200); // yer tortishi
+
+    this.physics.add.collider(this.player, this.ground);
+
+    // boshlang'ich parametrlar
+    this.isGameOver = false;
+    this.score = 0;
+    this.speed = 220; // to'siqlar harakati tezligi
+    this.spawnTimer = 0;
+    this.coinTimer = 0;
+
+    // to'siqlar va pullar guruhlari
+    this.obstacles = this.physics.add.group();
+    this.coins = this.physics.add.group();
+
+    // collision / overlap tekshiruvlar
+    this.physics.add.collider(this.obstacles, this.ground);
+    this.physics.add.collider(this.player, this.obstacles, this.onPlayerHit, null, this);
+    this.physics.add.overlap(this.player, this.coins, this.collectCoin, null, this);
+
+    // touch va space uchun input
+    this.input.on('pointerdown', this.handleJump, this);
+    this.input.keyboard.on('keydown-SPACE', this.handleJump, this);
+
+    // score text
+    this.scoreText = this.add.text(12,12, 'Score: 0', { font: '20px sans-serif', fill: '#ffffff' });
+
+    // mobile-friendly: kattaroq touch-zona
+    this.input.addPointer(2);
+
+    // start message
+    this.showMessage('Boshlash uchun ekranini bosing', 1500);
+
+    // difficulty increase timer
+    this.time.addEvent({ delay: 8000, callback: ()=>{ this.speed += 30; }, loop: true });
+  }
+
+  update(time, delta){
+    if(this.isGameOver) return;
+
+    // spawn obstacles har 1.2 soniya (tezlashadi)
+    this.spawnTimer += delta;
+    if(this.spawnTimer > 1200){
+      this.spawnTimer = 0;
+      this.spawnObstacle();
+    }
+
+    // spawn coin
+    this.coinTimer += delta;
+    if(this.coinTimer > 900){
+      this.coinTimer = 0;
+      this.spawnCoin();
+    }
+
+    // harakat: to'siqlarni chapga surish
+    Phaser.Actions.IncX(this.obstacles.getChildren(), - (this.speed * delta / 1000));
+    Phaser.Actions.IncX(this.coins.getChildren(), - (this.speed * delta / 1000));
+
+    // o'chirilishi kerak bo'lganlar
+    this.obstacles.getChildren().forEach(o => {
+      if(o.x + o.width < 0) { o.destroy(); }
+    });
+    this.coins.getChildren().forEach(c => {
+      if(c.x + c.width < 0) { c.destroy(); }
+    });
+
+    // update score passively (masalan, vaqtga qarab)
+    this.score += delta * 0.01; // kichik passiv ochko
+    this.scoreText.setText('Score: ' + Math.floor(this.score));
+  }
+
+  handleJump(){
+    if(this.isGameOver) {
+      this.restartGame();
+      return;
+    }
+    // player's vertical velocity: agar yerda bo'lsa sakrash
+    if(this.player.body.onFloor()){
+      this.player.body.setVelocityY(-520);
+      // kichik vizual 'squash' effekt
+      this.tweens.add({
+        targets: this.player,
+        scaleY: 0.9,
+        duration: 60,
+        yoyo: true,
+      });
+    } else {
+      // double-jump misoli: biroz kichik kuch
+      if(!this.hasDoubleJumped){
+        this.player.body.setVelocityY(-420);
+        this.hasDoubleJumped = true;
+      }
+    }
+    // reset double jump on landing
+    this.time.delayedCall(80, ()=>{ if(this.player.body.onFloor()) this.hasDoubleJumped = false; }, [], this);
+  }
+
+  spawnObstacle(){
+    // turli balandlikdagi to'siqlar
+    const height = Phaser.Math.Between(30, 90);
+    const y = this.scale.height - 64 - height;
+    const x = this.scale.width + 40;
+    const rect = this.add.rectangle(x, y, 30, height, 0xff6b6b).setOrigin(0,0);
+    this.physics.add.existing(rect);
+    rect.body.setImmovable(true);
+    rect.body.allowGravity = false;
+    rect.width = 30; rect.height = height;
+    this.obstacles.add(rect);
+  }
+
+  spawnCoin(){
+    const size = 18;
+    const x = this.scale.width + 30;
+    const minY = 100;
+    const maxY = this.scale.height - 150;
+    const y = Phaser.Math.Between(minY, maxY);
+    const coin = this.add.circle(x, y, size/2, 0xffd166);
+    this.physics.add.existing(coin);
+    coin.body.setImmovable(true);
+    coin.body.allowGravity = false;
+    coin.radius = size/2;
+    coin.width = size; coin.height = size;
+    this.coins.add(coin);
+  }
+
+  collectCoin(player, coin){
+    coin.destroy();
+    this.score += 80;
+    // kichik effekt
+    this.tweens.add({
+      targets: this.scoreText,
+      scale: 1.2,
+      duration: 120,
+      yoyo: true,
+      onComplete: ()=>{ this.scoreText.scale = 1; }
+    });
+  }
+
+  onPlayerHit(){
+    if(this.isGameOver) return;
+    this.isGameOver = true;
+    // o'yinni to'xtatish vizual
+    this.player.fillColor = 0xff8fa3;
+    this.showMessage('O\'yin tugadi — qaytadan boshlash uchun teging', 2000);
+    // to'siqlarni to'xtatish
+    this.obstacles.getChildren().forEach(o => o.body.setVelocityX(0));
+    this.coins.getChildren().forEach(c => c.body.setVelocityX(0));
+    // kamera tepaga small shake
+    this.cameras.main.shake(300, 0.01);
+  }
+
+  restartGame(){
+    // tozalash
+    this.obstacles.clear(true,true);
+    this.coins.clear(true,true);
+    this.score = 0;
+    this.speed = 220;
+    this.isGameOver = false;
+    this.player.x = 80;
+    this.player.y = this.scale.height - 150;
+    this.player.body.setVelocity(0);
+    this.player.body.setGravityY(1200);
+    this.player.fillColor = 0x66ccff;
+    this.showMessage('Boshlash — ekranni bosing', 1000);
+  }
+
+  showMessage(text, duration=1200){
+    const style = { font: '18px sans-serif', fill:'#ffffff', backgroundColor:'rgba(0,0,0,0.25)', padding:6 };
+    const msg = this.add.text(this.scale.width/2, this.scale.height/2 - 40, text, style).setOrigin(0.5);
+    this.tweens.add({ targets: msg, alpha: { from: 0, to: 1 }, duration:200, yoyo:false });
+    this.time.delayedCall(duration, ()=>{ this.tweens.add({ targets: msg, alpha:0, duration:200, onComplete: ()=>msg.destroy() }); });
+  }
+}
+
+const config = {
+  type: Phaser.AUTO,
+  parent: 'game-container',
+  width: window.innerWidth,
+  height: window.innerHeight,
+  physics: {
+    default: 'arcade',
+    arcade: {
+      gravity: { y: 0 }, // individual bodylarga gravity qo'yamiz
+      debug: false
+    }
+  },
+  scene: [MainScene],
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH
+  }
+};
+
+window.addEventListener('load', ()=>{
+  const game = new Phaser.Game(config);
+
+  // device rotation yoki o'lcham o'zgarganda o'yinni qayta resize qilish
+  window.addEventListener('resize', ()=> {
+    game.scale.resize(window.innerWidth, window.innerHeight);
+  });
+});
+</script>
+</body>
+</html>
